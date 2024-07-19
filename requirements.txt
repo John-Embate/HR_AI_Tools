@@ -3,6 +3,7 @@ matplotlib
 ollama==0.2.1
 openai==1.33.0
 pandas==2.2.2
+xlsxwriter
 pdfminer.six==20240706
 plotly==5.22.0
 PyPDF2==3.0.1
