@@ -2,32 +2,29 @@ from pdfminer.high_level import extract_text
 import google.generativeai as genai
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
-from datetime import datetime
 from PyPDF2 import PdfReader
 import plotly.express as px
 from openai import OpenAI
 import streamlit as st
 import pandas as pd
+import pytz
+import PyPDF2
 import ollama
+import datetime
+import csv
+import time
 import json
 import io
 import re
 import os
 
 
-#Configure this one to True if deployed on streamlit community cloud or on local machine
-#This helps change the json file and api key loading
-is_streamlit_deployed = True
+#Initialize some of the state variables at the start of the script:
+if "total_resume_processed" not in st.session_state:
+    st.session_state["total_resume_processed"] = 1 #Starting number
 
-if "api_keys" not in st.session_state:
-    st.session_state["api_keys"] = {}
-
-if is_streamlit_deployed:
-    st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] = st.secrets["GOOGLE_GEN_AI_API_KEY"]
-else:
-    load_dotenv(dotenv_path='cred.env')  # This method will read key-value pairs from a .env file and add them to environment variable.
-    st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] = os.getenv('GOOGLE_GEN_AI_API_KEY')
-#FUNCTION: START HERE
+if "total_resumes" not in st.session_state:
+    st.session_state["total_resumes"] = 0 #Get the total resumes for progressbar updates
 
 #For data filtering and report: START
 def get_longest_time_at_a_job_duration_company(json_data):
@@ -43,6 +40,24 @@ def get_longest_time_at_a_job_duration_company(json_data):
             company_name = job["Company Name"]
             job_role = job["Job Role"]
     return company_name, job_role, max_duration if max_duration > 0 else None  # Return None if no valid duration found
+
+def validate_folder_path(folder_path):
+    # Check if the folder path exists
+    if not os.path.exists(folder_path):
+        st.toast("Error accessing the directory/path. Please check the folder path.", icon="⚠️")
+        return False
+
+    # Check if the folder contains only pdf, doc, or docx files
+    valid_extensions = {'.pdf', '.doc', '.docx'}
+    all_files_valid = True
+    for file in os.listdir(folder_path):
+        extension = os.path.splitext(file)[1]
+        if extension.lower() not in valid_extensions:
+            all_files_valid = False
+            st.toast("The folder path contains files other than PDF, DOC, or DOCX.", icon="⚠️")
+            break
+
+    return all_files_valid
 
 def get_shortest_time_at_a_job_duration_company(json_data):
     """Returns a tuple (company_name, job_role, duration) of the shortest time an applicant 
@@ -196,6 +211,203 @@ def is_job_hopper(analysis_dict, job_hopper_average_month_threshold,
 
 #For data filtering and report: END
 
+#For processing documents from folder path: START
+
+def all_files_in_folder_path_are_valid(folder_path):
+
+    # Check if the folder contains only pdf, doc, or docx files
+    valid_extensions = {'.pdf', '.doc', '.docx'}
+    all_files_valid = True
+    for file in os.listdir(folder_path):
+        extension = os.path.splitext(file)[1]
+        if extension.lower() not in valid_extensions:
+            all_files_valid = False
+            break
+    
+    return all_files_valid
+
+def is_text_based_pdf(file_path):
+    """ Check if a PDF file is text-based or scanned/image-based. """
+    try:
+        with open(file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            for page in reader.pages:
+                if page.extract_text():
+                    return True  # Text-based if any text can be extracted
+        return False  # Considered image-based if no text was extracted from any page
+    except:
+        return False  # Return False if there's an error, assuming it can't be processed
+
+def process_documents(folder_path):
+    # Scheduler initialization
+    continue_handling_documents = True
+
+    while continue_handling_documents:
+        start_time = datetime.datetime.now()
+        print(f"Start time: {start_time}")
+        continue_handling_documents = handle_document_processing(folder_path)
+        if not continue_handling_documents: #if done processing
+            break
+        end_time = datetime.datetime.now()
+        print(f"End time: {end_time}")
+        duration = end_time - start_time
+        duration_in_seconds = duration.total_seconds()
+        remaining_time = 80 - duration_in_seconds #remaining time it takes to complete an 80 seconds job #add 20 seconds allowance
+        if remaining_time > 0:
+            print(f"Sleeping for {remaining_time} seconds to make up the one minute and 20 seconds.")
+            time.sleep(remaining_time)
+        else:
+            print("No need to sleep as the duration or more than 80 seconds.")
+
+def handle_document_processing(folder_path):
+    # Check if the maximum requests per minute have been reached
+    print("Handling Documents...")
+
+    # File handling and file extension validation here
+    valid_extensions = {'.pdf', '.doc', '.docx'}
+    total_file_processed_session = 0 #For each session to exit time
+
+
+    if "total_resumes" not in st.session_state:
+        print("Total resumes doesn't exist st.session state currently.")
+
+    #This is for counting the number of documents to process
+    if st.session_state["total_resumes"] == 0: #Instantiate it once, it will go back to zero once Run is clicked again
+        for file in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, file)
+            file_extension = os.path.splitext(file)[1].lower()
+
+            if file_extension in valid_extensions:
+                if file_extension == ".pdf" and not is_text_based_pdf(file_path):
+                    continue
+                else:
+                    st.session_state["total_resumes"] += 1
+
+    
+    for file in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, file)
+        file_extension = os.path.splitext(file)[1].lower()
+
+        # Skip files already processed
+        if file in st.session_state['successful_processed_files'] or file in st.session_state['fail_processed_files']:
+            continue
+
+        if file_extension in valid_extensions:
+            total_file_processed_session += 1 ##Incerement the correct processed data to shutdown the scheduler apporpriately
+            if file_extension == ".pdf" and not is_text_based_pdf(file_path):
+                st.session_state['fail_processed_files'].append(file)
+                st.session_state["total_resume_processed"] += 1 #Increment starting number
+            else:
+                if st.session_state["request_count"] < 14: #Since a minimum of 2 request are needed to complete the job
+                    print(f"Running analysis for {file}")  # Debug output
+                    response_json_valid = False
+                    is_expected_json = False
+                    max_attempts = 3
+                    parsed_result = {}
+                    while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
+                        analysis_result = ""
+                        try:
+                            analysis_result = generate_response(file_path)
+                        except Exception as e:
+                            print(str(e))
+                            st.toast(f"Warning: {str(e)}")
+                            continue
+                        parsed_result, response_json_valid = extract_and_parse_json(analysis_result)
+                        if response_json_valid == False:
+                            print(f"Failed to validate and parse json for {file}... Trying again...")
+                            max_attempts = max_attempts - 1
+                            continue
+
+                        is_expected_json = is_expected_json_content(parsed_result)
+                        if is_expected_json == False:
+                            print(f"Successfully validated and parse json for {file} but is not expected format... Trying again...")
+                            continue
+
+                        st.session_state['successful_processed_files'].append(file)
+                        applicants_job_history_json_update(os.path.join(folder_path, "applicants_job_history.json"), parsed_result)
+                    
+                    if max_attempts >= 3 and response_json_valid == False and  response_json_valid == False:
+                                st.session_state['fail_processed_files'].append(file.name)
+
+                st.session_state['request_count'] = 0 #Refresh to zero, create external code to continue next another minute
+                # Debug print the parsed results
+                print(f"Parsed Results for {file}: {parsed_result}")
+                analysis_dict = analyze_resume(parsed_result)
+                analysis_dict["Is Job Hopper?"] = is_job_hopper(
+                    analysis_dict,
+                    job_hopper_average_month_threshold,
+                    job_hopper_average_month_less_than_3year_threshold,
+                    job_hopper_total_jobs_less_than_3year_threshold,
+                    criteria_method,
+                )
+                #### Try to save the results on the folder one by one
+                csv_path = os.path.join(folder_path, "job_hopper_results.csv") 
+                try:
+                    append_to_csv(analysis_dict, csv_path) #Append the analysis_dict to csv
+                except Exception as e:
+                    print(f"Failed to append results of {file} to job_hopper_results.csv")
+                    st.toast(f"Warning ⚠️: Failed to append results of {analysis_dict['Name']} to job_hopper_results.csv")
+                processed_documents_status_json_update(os.path.join(folder_path, "processed_documents_status_results.json"))
+                
+                st.session_state['job_hopper_all_data'].append(analysis_dict)
+                st.session_state["applicants_work_history"][analysis_dict["Name"]] = parsed_result
+                st.session_state['resumes_processed_progress_bar'].progress(st.session_state["total_resume_processed"]/st.session_state["total_resumes"], text=f"Analyzed the resume of {st.session_state['total_resume_processed']} applicant/s")
+                print(f'Total_resumes: {st.session_state["total_resumes"]}')
+                print(f'Total_resume_processed: {st.session_state["total_resume_processed"]}')
+                st.session_state["total_resume_processed"] += 1 #Increment starting number
+
+    df = pd.DataFrame(st.session_state['job_hopper_all_data'])
+    st.session_state['df_job_hopping_results'] = df
+
+    if st.session_state["total_resume_processed"] >= st.session_state["total_resumes"]: #If no other files are needed to be processed this should be assumed to be equal
+        print(f'Total_resumes: {st.session_state["total_resumes"]}')
+        print(f'Total_resume_processed_with_+1_increment: {st.session_state["total_resume_processed"]}')
+        st.toast("Stopping Scheduler. All documents have been processed. Please kindly check.")
+        return False #Stop handling documents
+    
+    return True #continue handling documents
+
+def append_to_csv(data, csv_path):
+    """Append a dictionary of data to a CSV file."""
+    file_exists = os.path.isfile(csv_path)
+    with open(csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+        fieldnames = data.keys()
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        if not file_exists:
+            writer.writeheader()  # Only write header if file does not exist
+
+        writer.writerow(data)
+
+def processed_documents_status_json_update(json_path):
+    """Update or create a JSON file with the lists of processed and failed documents."""
+    data = {
+        "successful_processed_files": st.session_state['successful_processed_files'],
+        "fail_processed_files": st.session_state['fail_processed_files']
+    }
+    try:
+        with open(json_path, 'w', encoding='utf-8') as jsonfile:
+            json.dump(data, jsonfile, indent=4)
+    except:
+        print("Failed to dump successful and failed processed documents list on processed_documents_status_results.json file")
+        st.toast("Failed to update/save successful and failed processed documents list of  processed documents status results")
+
+def applicants_job_history_json_update(json_file_path, new_data):
+    # Load existing data from the JSON file
+    if os.path.exists(json_file_path):
+        with open(json_file_path, 'r') as file:
+            data = json.load(file)
+    else:
+        data = []
+
+    # Append new data to the existing data
+    data.append(new_data)
+
+    # Write the updated data back to the JSON file
+    with open(json_file_path, 'w') as file:
+        json.dump(data, file, indent=4)
+
+#For processing documents from folder path: END
 @st.experimental_dialog("Resume Json Processing...")
 def json_resume_processing():
     st.markdown("## The following example json structure must be strictly followed to successfully process your file.")
@@ -318,7 +530,7 @@ Given the following resume data. I'd like you to extract only the important data
 
 Notes:
 - No yapping!
-- If the resume text contains "Present" date, consider that today's date is {datetime.now().strftime("%B %d, %Y")}.
+- If the resume text contains "Present" date, consider that today's date is {datetime.datetime.now().strftime("%B %d, %Y")}.
 
 ----------------------------------------
 Resume Text:
@@ -344,6 +556,7 @@ Given the resume text below, I want you to extract me the following information/
 Note:
 - Please strictly follow the json structure above.
 - If the information doesn't exist enter a json "null" value.
+- If no company history then pass an empty list.
 ----------------------------------------
 
 Resume Information:
@@ -426,16 +639,27 @@ Resume Information:
         text = extract_text(uploaded_file)
         primary_prompt = primary_data_extract_query + text
         chat = model.start_chat(history=[])
+        primary_response = None
+        main_response = None
 
-        primary_response = chat.send_message(primary_prompt)
+        if st.session_state['request_count'] <= 14:
+            primary_response = chat.send_message(primary_prompt)
+            # print(f"Primary Response Text:\n{primary_response.text}")
+            st.session_state['request_count'] += 1
+        else:
+            # Raise an exception when the request limit for primary requests is reached
+            raise Exception("Request limit reached for initial processing. Please wait a minute before trying again.")
 
-        # print(f"Primary Response Text:\n{primary_response.text}")
-
-        main_prompt = query_text + primary_response.text 
-
-        main_response = chat.send_message(main_prompt)
         
-        # print(f"Main Response Text:\n{main_response.text}")
+        if st.session_state['request_count'] <= 15:
+            main_prompt = query_text + primary_response.text 
+            main_response = chat.send_message(main_prompt)
+            # print(f"Main Response Text:\n{main_response.text}")
+            st.session_state['request_count'] += 1
+        else:
+            # Raise an exception when the request limit for main requests is reached
+            raise Exception("Request limit reached for detailed processing. Please wait a minute before trying again.")
+        
     return main_response.text
 
 
@@ -468,16 +692,16 @@ def get_first_numerical_value(text):
 
 # Sidebar for API Key and navigation
 st.sidebar.title("Settings")
+genai_api_key = st.sidebar.text_input("Enter your Google AI Studio API Key", type="password")
+
+if "api_keys" not in st.session_state:
+    st.session_state["api_keys"] = {}
+st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] = genai_api_key
 selected_option = st.sidebar.radio("Select Task", [
     "Resume Job Hopper Identifier", 
     "Resume - Job Description Fit Identifier", 
     "Resume Data Miner"
 ])
-st.sidebar.markdown("""
-#### For Customized AI Applications Contact Me:
-- LinkedIn: [John Embate](https://www.linkedin.com/in/john-william-embate-8759a4157)
-- Email: [John Embate](mailto:johnembate0@gmail.com)
-""", unsafe_allow_html=True)
 
 st.title(selected_option)  # Use the selected option as the page title
 
@@ -492,15 +716,10 @@ if 'uploaded_files' not in st.session_state:
 if selected_option == "Resume Job Hopper Identifier":
 
     st.markdown("### Job Hopper Criteria")
-    job_hopper_average_month_threshold = None
-    job_hopper_average_month_less_than_3year_threshold = None
-    job_hopper_total_jobs_less_than_3year_threshold = None
-    criteria_method = None
-    with st.expander("Criteria Configuration"):
-        job_hopper_average_month_threshold = st.number_input("Average Time at Jobs (Months): Flag if LESS than", min_value=1, value=5)
-        job_hopper_average_month_less_than_3year_threshold = st.number_input("Average Time at Jobs UNDER 3 Years (Months): Flag if LESS than", min_value=1, value=5)
-        job_hopper_total_jobs_less_than_3year_threshold = st.number_input("Total Jobs UNDER 3 Years: Flag if MORE than", min_value=1, value=5)
-        criteria_method = st.radio(
+    job_hopper_average_month_threshold = st.number_input("Average Time at Jobs (Months): Flag if LESS than", min_value=1, value=5)
+    job_hopper_average_month_less_than_3year_threshold = st.number_input("Average Time at Jobs UNDER 3 Years (Months): Flag if LESS than", min_value=1, value=5)
+    job_hopper_total_jobs_less_than_3year_threshold = st.number_input("Total Jobs UNDER 3 Years: Flag if MORE than", min_value=1, value=5)
+    criteria_method = st.radio(
             "How to Flag a Job Hopper:",
             [
                 "All criteria must be met", 
@@ -509,7 +728,7 @@ if selected_option == "Resume Job Hopper Identifier":
                 "Only consider 'Avg. Time at Jobs UNDER 3 Years'",
                 "Only consider 'Total Jobs UNDER 3 Years'"
             ]
-        )
+    )
     with st.expander("JSON File Format Uploading Guidelines"):
         st.markdown("#### For uploading JSON files, the following example json structure must be strictly followed to successfully process your file.")
         st.write("""\n
@@ -541,6 +760,7 @@ if selected_option == "Resume Job Hopper Identifier":
 ]\n  
 """)
 
+    folder_path = st.text_input("Enter the folder path:", "")
     uploaded_files = st.file_uploader("Upload Resume PDFs or parse JSON file", accept_multiple_files=True, type=["pdf", "doc", "docx", "json"], key="file_uploader")
 
     if "df_job_hopping_results" not in st.session_state:
@@ -555,93 +775,194 @@ if selected_option == "Resume Job Hopper Identifier":
     if 'resume_progress_bar' not in st.session_state:
         st.session_state['resume_progress_bar'] = None
 
+    if 'job_hopper_all_data' not in st.session_state:
+        st.session_state['job_hopper_all_data'] = []
+
+    if 'successful_processed_files' not in st.session_state:
+        st.session_state['successful_processed_files'] = []
+
+    if 'fail_processed_files' not in st.session_state:
+        st.session_state['fail_processed_files'] = []
+
+    if 'request_count' not in st.session_state:
+        st.session_state['request_count'] = 0
+
     if st.button('Run'):
-        st.session_state["applicants_work_history"] = {} #empty session_state
-        st.session_state['questions_progress_bar'] = st.progress(0, text="Analyzing your resume data")
-
-        if not st.session_state.uploaded_files:
-            st.warning("Please upload at least one PDF file to analyze.")
+        if not st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] or st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] == "":
+            st.warning("Please enter your Google Gen API Key to proceed.")
             st.stop()
+
+        #Reset values
+        st.session_state["applicants_work_history"] = {} #empty session_state
+        st.session_state['resumes_processed_progress_bar'] = st.progress(0, text="Analyzing your resume data")
+        st.session_state["total_resume_processed"] = 1#Starting number
+        st.session_state["total_resumes"] = 0 #Get the total resumes for progressbar updates
+        st.session_state['job_hopper_all_data'] = [] #intialize
+        st.session_state['successful_processed_files'] = [] #intialize
+        st.session_state['fail_processed_files'] = [] #intialize
+
+        if os.path.exists(folder_path):
+            print("Uploaded Folder path exists.")
+            #Reset the values
+            
+            if not all_files_in_folder_path_are_valid(folder_path):
+                st.toast("The folder path contains files other than PDF, DOC, or DOCX. Proceeding to process the documents with valid exstension files.", icon="⚠️")
+
+            # Process the documents:
+            print("Processing Documents")
+            process_documents(folder_path)
+
         else:
-            all_data = []
+            if not st.session_state.uploaded_files:
+                st.toast("Error accessing the directory/path. Please check the folder path.", icon="⚠️")
+
+
+        ###  For processing uploaded pdf files.
+        if not st.session_state.uploaded_files and (not folder_path or folder_path == ""):
+            st.warning("Please upload at least one PDF file to analyze.")
+            
+        elif st.session_state.uploaded_files:
+            print("Processing uploaded files")
             error_processing_json_flag = True #To show up the dialog once for json files that are not structured properly.
-            total_resume_processed = 1 #Starting number
-            total_resumes = 0 #Get the total resumes for progressbar updates
 
             for file in st.session_state.uploaded_files:
                 if file.name.endswith('.json'):
                     resumes_data = json.load(file)
-                    total_resumes += len(resumes_data)
+                    st.session_state["total_resumes"] += len(resumes_data)
                 else:
-                    total_resumes += 1 #increment 1 for each pdf or doc files
+                    st.session_state["total_resumes"] += 1 #increment 1 for each pdf or doc files
 
-            for file in st.session_state.uploaded_files:
-                if file.name.endswith('.json'):
-                    # The file is a JSON file
-                    print("Next Json Processing...")
-                    file.seek(0) # since file was opened previously
-                    resumes_data = json.load(file)
-                    for resume in resumes_data:
-                        is_expected_json = is_expected_json_content(resume)
-                        if not is_expected_json:
-                            print(f"Warning the resume of {resume['Name']} doesn't follow the expected format. Please fix it manually")
-                            st.toast(f"Warning the resume of {resume['Name']} doesn't follow the expected format. Please fix it manually")
-                            if error_processing_json_flag:
-                                json_resume_processing()
-                                error_processing_json_flag = False
-                        else:
-                            analysis_dict = analyze_resume(resume)
-                            analysis_dict["Is Job Hopper?"] = is_job_hopper(
+            continue_handling_documents = True
+            while continue_handling_documents:
+                start_time = datetime.datetime.now()
+                print(f"Start time: {start_time}")
+                for file in st.session_state.uploaded_files:
+                    if file.name.endswith('.json'):
+                        if file.name in st.session_state['successful_processed_files'] or file in st.session_state['fail_processed_files']:
+                            continue #skip if already processed last time
+                        # The file is a JSON file
+                        print("Next Json Processing...")
+                        file.seek(0) # since file was opened previously
+                        resumes_data = json.load(file)
+                        st.session_state['successful_processed_files'].append(file.name) #Automatically consider json files as successfully processed since it doesn't need or require llm content generation
+                        for resume in resumes_data:
+                            is_expected_json = is_expected_json_content(resume)
+                            if not is_expected_json:
+                                try:
+                                    print(f"Warning ⚠️: The resume of {resume['Name']} doesn't follow the expected format. Please fix it manually")
+                                    st.toast(f"Warning ⚠️: The resume of {resume['Name']} doesn't follow the expected format. Please fix it manually")
+                                    
+                                    if error_processing_json_flag:
+                                        json_resume_processing()
+                                        error_processing_json_flag = False
+
+                                except Exception as e:
+                                    print(f"Warning ⚠️: Error processing resume of json file name: {file.name}")
+                                    st.toast(f"Warning ⚠️: Error encountered while processing the json file name: {file.name}")
+
+                            else:
+                                analysis_dict = analyze_resume(resume)
+                                analysis_dict["Is Job Hopper?"] = is_job_hopper(
+                                    analysis_dict,
+                                    job_hopper_average_month_threshold,
+                                    job_hopper_average_month_less_than_3year_threshold,
+                                    job_hopper_total_jobs_less_than_3year_threshold,
+                                    criteria_method,
+                                )
+                                st.session_state['job_hopper_all_data'].append(analysis_dict)
+                                st.session_state["applicants_work_history"][analysis_dict["Name"]] = resume
+                            st.session_state['resumes_processed_progress_bar'].progress(st.session_state["total_resume_processed"]/st.session_state["total_resumes"], text=f"Analyzed the resume of {st.session_state['total_resume_processed']} applicants")
+                            st.session_state["total_resume_processed"] += 1 #Increment starting number
+
+                    else:
+                        # Skip files already processed
+                        if file.name in st.session_state['successful_processed_files'] or file.name in st.session_state['fail_processed_files']:
+                            print("Doc already processed")
+                            continue
+
+                        
+                        if extract_text(file).strip() == "": #If empty string
+                            print(f"Pdf file {file.name} is not text based.")
+                            st.session_state['fail_processed_files'].append(file.name)
+                            st.session_state["total_resume_processed"] += 1 #Increment starting number
+                            continue
+
+                        if st.session_state["request_count"] < 14:
+                            # The file is not a JSON file. This could be a pdf, doc, or docs
+                            print(f"Running analysis for {file.name}")  # Debug output
+                            response_json_valid = False
+                            is_expected_json = False
+                            max_attempts = 3
+                            parsed_result = {}
+                            while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
+                                analysis_result = generate_response(file)
+                                parsed_result, response_json_valid = extract_and_parse_json(analysis_result)
+                                if response_json_valid == False:
+                                    print(f"Failed to validate and parse json for {file.name}... Trying again...")
+                                    max_attempts = max_attempts - 1
+                                    continue
+
+                                is_expected_json = is_expected_json_content(parsed_result)
+                                if is_expected_json == False:
+                                    print(f"Successfully validated and parse json for {file.name} but is not expected format... Trying again...")
+                                    continue
+
+                                st.session_state['successful_processed_files'].append(file.name)
+                                if os.path.exists(folder_path): #Only if a valid folder path were given
+                                    applicants_job_history_json_update(os.path.join(folder_path, "applicants_job_history.json"), parsed_result)
+                            
+                            if max_attempts >= 3 and response_json_valid == False and  response_json_valid == False:
+                                st.session_state['fail_processed_files'].append(file.name)
+
+                        st.session_state['request_count'] = 0 #Refresh to zero, create external code to continue next another minute
+                        # Debug print the parsed results
+                        print(f"Parsed Results for {file.name}: {parsed_result}")
+                        analysis_dict = analyze_resume(parsed_result)
+                        analysis_dict["Is Job Hopper?"] = is_job_hopper(
                                 analysis_dict,
                                 job_hopper_average_month_threshold,
                                 job_hopper_average_month_less_than_3year_threshold,
                                 job_hopper_total_jobs_less_than_3year_threshold,
                                 criteria_method,
-                            )
-                            all_data.append(analysis_dict)
-                            st.session_state["applicants_work_history"][analysis_dict["Name"]] = resume
-                        st.session_state['questions_progress_bar'].progress(total_resume_processed/total_resumes, text=f"Analyzed the resume of {total_resume_processed} applicants")
-                        total_resume_processed += 1 #Increment starting number
+                        )
 
+                        if os.path.exists(folder_path): #Only if a valid folder path were given
+                            csv_path = os.path.join(folder_path, "job_hopper_results.csv") 
+                            try:
+                                append_to_csv(analysis_dict, csv_path) #Append the analysis_dict to csv
+                            except Exception as e:
+                                print(f"Failed to append results of {file} to job_hopper_results.csv")
+                                st.toast(f"Warning ⚠️: Failed to append results of {analysis_dict['Name']} to job_hopper_results.csv")
+                            processed_documents_status_json_update(os.path.join(folder_path, "processed_documents_status_results.json"))
+                
+                        st.session_state['job_hopper_all_data'].append(analysis_dict)
+                        st.session_state["applicants_work_history"][analysis_dict["Name"]] = parsed_result
+                        st.session_state['resumes_processed_progress_bar'].progress(st.session_state["total_resume_processed"]/st.session_state["total_resumes"], text=f"Analyzed the resume of {st.session_state['total_resume_processed']} applicant/s")
+                        st.session_state["total_resume_processed"] += 1 #Increment starting number
+                
+                if st.session_state["total_resume_processed"] >= st.session_state["total_resumes"]: #If no other files are needed to be processed this should be assumed to be equal
+                    print(f'Total_resumes: {st.session_state["total_resumes"]}')
+                    print(f'Total_resume_processed_with_+1_increment: {st.session_state["total_resume_processed"]}')
+                    st.toast("Stopping Scheduler. All documents have been processed. Please kindly check.")
+                    break #break while loop
+                
+                end_time = datetime.datetime.now()
+                print(f"End time: {end_time}")
+                duration = end_time - start_time
+                duration_in_seconds = duration.total_seconds()
+                remaining_time = 80 - duration_in_seconds #remaining time it takes to complete an 80 seconds job #add 20 seconds allowance
+                if remaining_time > 0:
+                    print(f"Sleeping for {remaining_time} seconds to make up the one minute and 20 seconds.")
+                    time.sleep(remaining_time)
                 else:
-                    # The file is not a JSON file. This could be a pdf, doc, or docs
-                    print(f"Running analysis for {file.name}")  # Debug output
-                    response_json_valid = False
-                    max_attempts = 3
-                    parsed_result = {}
-                    while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
-                        analysis_result = generate_response(file)
-                        parsed_result, response_json_valid = extract_and_parse_json(analysis_result)
-                        if response_json_valid == False:
-                            print(f"Failed to validate and parse json for {file.name}... Trying again...")
-                            max_attempts = max_attempts - 1
-                            continue
+                    print("No need to sleep as the duration or more than 80 seconds.")
 
-                        is_expected_json = is_expected_json_content(parsed_result)
-                        if is_expected_json == False:
-                            print(f"Successfully validated and parse json for {file.name} but is not expected format... Trying again...")
-
-                    # Debug print the parsed results
-                    print(f"Parsed Results for {file.name}: {parsed_result}")
-                    analysis_dict = analyze_resume(parsed_result)
-                    analysis_dict["Is Job Hopper?"] = is_job_hopper(
-                        analysis_dict,
-                        job_hopper_average_month_threshold,
-                        job_hopper_average_month_less_than_3year_threshold,
-                        job_hopper_total_jobs_less_than_3year_threshold,
-                        criteria_method,
-                    )
-                    all_data.append(analysis_dict)
-                    st.session_state["applicants_work_history"][analysis_dict["Name"]] = parsed_result
-                    st.session_state['questions_progress_bar'].progress(total_resume_processed/total_resumes, text=f"Analyzed the resume of {total_resume_processed} applicant/s")
-                    total_resume_processed += 1 #Increment starting number
-
-            df = pd.DataFrame(all_data)
+            df = pd.DataFrame(st.session_state['job_hopper_all_data'])
             st.session_state['df_job_hopping_results'] = df
             
     
     if st.session_state['df_job_hopping_results'].empty == False:   
-        st.session_state['questions_progress_bar'].empty()
+        st.session_state['resumes_processed_progress_bar'].empty()
         st.write("Analysis Results")
         df = st.session_state['df_job_hopping_results']
         st.dataframe(df)
@@ -666,7 +987,6 @@ if selected_option == "Resume Job Hopper Identifier":
         # Only show balloons if either download button is clicked
         if csv_downloaded or excel_downloaded:
             st.balloons()
-
 
 
 elif selected_option == "Resume - Job Description Fit Identifier":
@@ -807,7 +1127,7 @@ elif selected_option == "Resume - Job Description Fit Identifier":
                 max_attempts = 3
                 parsed_result = {}
 
-                while not response_json_valid and max_attempts >0: ## Wait till the response json is valid
+                while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
                     response = model.generate_content(prompt).text
                     parsed_result, response_json_valid = extract_and_parse_json(response)
                     if response_json_valid == False:
@@ -821,7 +1141,7 @@ elif selected_option == "Resume - Job Description Fit Identifier":
             df = pd.DataFrame(all_data)
             ### Dummy data sample
             # data = {
-            #     "Name": ["Alejandra Talamante Garcia", "Aloha Reyes Baluyut", "Annie Gail Liangco Suba"],
+            #     "Name": ["Name 1", "Name 2", "Name 3"],
             #     "Academic Achievement": [92, 88, 95],  # Hypothetical academic scores out of 100
             #     "Technical Skills": [68, 69, 87],  # Skills rating out of 10
             #     "Relevant Experience (years)": [72, 65, 93],  # Number of years of relevant experience
@@ -845,7 +1165,6 @@ elif selected_option == "Resume - Job Description Fit Identifier":
         # Only show balloons if either download button is clicked
         if csv_downloaded or excel_downloaded:
             st.balloons()
-
 
     if st.session_state["df_job_fit_results"].empty == False:
         df = st.session_state['df_job_fit_results']
