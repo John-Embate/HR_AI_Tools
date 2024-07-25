@@ -26,6 +26,18 @@ if "total_resume_processed" not in st.session_state:
 if "total_resumes" not in st.session_state:
     st.session_state["total_resumes"] = 0 #Get the total resumes for progressbar updates
 
+if 'successful_processed_files' not in st.session_state:
+    st.session_state['successful_processed_files'] = []
+
+if 'fail_processed_files' not in st.session_state:
+    st.session_state['fail_processed_files'] = []
+
+if 'request_count' not in st.session_state:
+    st.session_state['request_count'] = 0
+
+if 'resume_progress_bar' not in st.session_state:
+    st.session_state['resume_progress_bar'] = None
+
 #For data filtering and report: START
 def get_longest_time_at_a_job_duration_company(json_data):
     """Returns a tuple (company_name, job_role, duration) of the longest time an applicant 
@@ -326,7 +338,7 @@ def handle_document_processing(folder_path):
                         st.session_state['successful_processed_files'].append(file)
                         applicants_job_history_json_update(os.path.join(folder_path, "applicants_job_history.json"), parsed_result)
                     
-                    if max_attempts >= 3 and response_json_valid == False and  response_json_valid == False:
+                    if max_attempts == 0 and response_json_valid == False and  is_expected_json == False:
                                 st.session_state['fail_processed_files'].append(file.name)
 
                 st.session_state['request_count'] = 0 #Refresh to zero, create external code to continue next another minute
@@ -458,7 +470,7 @@ def extract_and_parse_json(text):
     except json.JSONDecodeError:
         return None, False  # JSON parsing failed
 
-def is_expected_json_content(json_data):
+def is_expected_json_content(json_data, type = "job_hopper"):
     """
     Validates if the passed argument is a valid JSON with the expected structure.
 
@@ -468,30 +480,40 @@ def is_expected_json_content(json_data):
     Returns:
         True if the JSON is valid and has the expected structure, False otherwise.
     """
-
+    
     try:
         # Try to load the JSON data
         data = json.loads(json_data) if isinstance(json_data, str) else json_data
     except json.JSONDecodeError:
         return False
 
-    # Check for top-level keys
-    required_keys = ["Name", "Year Graduated", "Company History"]
-    if not all(key in data for key in required_keys):
-        return False
-
-    # Check if "Company History" is a list
-    if not isinstance(data["Company History"], list):
-        return False
-
-    # Check the structure of each company history item
-    for company_history in data["Company History"]:
+    if type == "job_hopper":
+        # Define required top-level keys for 'job_hopper'
+        required_keys = ["Name", "Year Graduated", "Company History"]
         required_company_keys = ["Company Name", "Year Started", "Job Role", "Working Months"]
-        if not all(key in company_history for key in required_company_keys):
+
+        if not all(key in data for key in required_keys):
+            return False
+        if not isinstance(data["Company History"], list):
+            return False
+        for company_history in data["Company History"]:
+            if not all(key in company_history for key in required_company_keys):
+                return False
+    
+    elif type == "job_fit":
+        # Define required top-level keys for 'job_fit'
+        required_keys = ["Name", "Technical Skills", "Relevant Experience", "Education Relevance", "Overall Score", "Overall Assessment"]
+        if not all(key in data for key in required_keys):
+            return False
+        if not isinstance(data.get("Technical Skills"), int) or not isinstance(data.get("Relevant Experience"), int) or not isinstance(data.get("Education Relevance"), int) or not isinstance(data.get("Overall Score"), int):
+            return False
+        if not isinstance(data.get("Overall Assessment"), str):
             return False
 
-    # If all checks pass, the JSON is valid
-    return True
+    else:
+        return False  # Unsupported type
+
+    return True  # All checks passed for the specified type
 
 def prepare_data_for_chart(df, names):
     df_filtered = df[df['Name'].isin(names)]
@@ -771,21 +793,9 @@ if selected_option == "Resume Job Hopper Identifier":
 
     if uploaded_files is not None:
         st.session_state.uploaded_files = uploaded_files
-    
-    if 'resume_progress_bar' not in st.session_state:
-        st.session_state['resume_progress_bar'] = None
 
     if 'job_hopper_all_data' not in st.session_state:
         st.session_state['job_hopper_all_data'] = []
-
-    if 'successful_processed_files' not in st.session_state:
-        st.session_state['successful_processed_files'] = []
-
-    if 'fail_processed_files' not in st.session_state:
-        st.session_state['fail_processed_files'] = []
-
-    if 'request_count' not in st.session_state:
-        st.session_state['request_count'] = 0
 
     if st.button('Run'):
         if not st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] or st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] == "":
@@ -895,7 +905,13 @@ if selected_option == "Resume Job Hopper Identifier":
                             max_attempts = 3
                             parsed_result = {}
                             while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
-                                analysis_result = generate_response(file)
+                                analysis_result = ""
+                                try:
+                                    analysis_result = generate_response(file)
+                                except Exception as e:
+                                    print(str(e))
+                                    st.toast(f"Warning: {str(e)}")
+                                    continue
                                 parsed_result, response_json_valid = extract_and_parse_json(analysis_result)
                                 if response_json_valid == False:
                                     print(f"Failed to validate and parse json for {file.name}... Trying again...")
@@ -911,7 +927,7 @@ if selected_option == "Resume Job Hopper Identifier":
                                 if os.path.exists(folder_path): #Only if a valid folder path were given
                                     applicants_job_history_json_update(os.path.join(folder_path, "applicants_job_history.json"), parsed_result)
                             
-                            if max_attempts >= 3 and response_json_valid == False and  response_json_valid == False:
+                            if max_attempts == 0 and response_json_valid == False and  is_expected_json == False:
                                 st.session_state['fail_processed_files'].append(file.name)
 
                         st.session_state['request_count'] = 0 #Refresh to zero, create external code to continue next another minute
@@ -966,7 +982,8 @@ if selected_option == "Resume Job Hopper Identifier":
         st.write("Analysis Results")
         df = st.session_state['df_job_hopping_results']
         st.dataframe(df)
-        # Download links for CSV
+
+        # Download links for CSV and Excel
         csv = df.to_csv(index=False).encode('utf-8')
         st.write("_Note: The durations are calculated/expressed in terms of months._")
         csv_downloaded = st.download_button("Download as CSV", csv, 'resume_job_hoppers.csv', 'text/csv')
@@ -975,6 +992,31 @@ if selected_option == "Resume Job Hopper Identifier":
             df.to_excel(writer, index=False, sheet_name='Sheet1')
         excel_downloaded = st.download_button("Download data as Excel", excel.getvalue(), 'resume_job_hoppers..xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
+
+        # Preparing JSON data for successfully and fail processed files
+        processed_files = {
+            "successful_processed_files": st.session_state['successful_processed_files'],
+            "fail_processed_files": st.session_state['fail_processed_files']
+        }
+        json_str = json.dumps(processed_files, indent=4).encode('utf-8')
+        
+        # Download link for JSON
+        json_downloaded = st.download_button("Download Processed Files Status JSON", json_str, 'processed_files.json', mime="application/json")
+
+        # Convert the dictionary to a list of dictionaries including the name inside each dictionary
+        applicant_list = [{**info} for name, info in st.session_state["applicants_work_history"].items()]
+        
+        # Convert the list into JSON
+        json_str = json.dumps(applicant_list, indent=4)
+        
+        # Create a Streamlit download button for the JSON data
+        st.download_button(
+            label="Download Applicants Job History JSON",
+            data=json_str,
+            file_name="applicants_work_history.json",
+            mime="application/json"
+        )
+        
         applicant_names = list(st.session_state["applicants_work_history"].keys())
         selected_applicant = st.selectbox("Select Applicant", applicant_names)
 
@@ -1122,23 +1164,44 @@ elif selected_option == "Resume - Job Description Fit Identifier":
                     response_mime_type = "application/json"
                 ))
 
-
                 response_json_valid = False
                 max_attempts = 3
                 parsed_result = {}
 
                 while not response_json_valid and max_attempts > 0: ## Wait till the response json is valid
-                    response = model.generate_content(prompt).text
+                    response = ""
+                    if st.session_state["request_count"] < 15:
+                        try:
+                            response = model.generate_content(prompt).text
+                        except Exception as e:
+                            print(str(e))
+                            max_attempts = max_attempts - 1 
+                            st.toast(f"Warning: {str(e)}")
+                            continue
+                        st.session_state['request_count'] += 1
+                    else:
+                        max_attempts = max_attempts - 1 
+                        continue #Continue on next operations, this will skip the while loop entirely
                     parsed_result, response_json_valid = extract_and_parse_json(response)
                     if response_json_valid == False:
                         print(f"Failed to validate and parse json for {uploaded_file.name}... Trying again...")
-                        max_attempts = max_attempts - 1 
+                        max_attempts = max_attempts - 1
+                        continue
 
-                print(f"Parsed Results for {uploaded_file.name}: {parsed_result}")
-                all_data.append(parsed_result)
+                    is_expected_json = is_expected_json_content(parsed_result)
+                    if is_expected_json == False:
+                        print(f"Successfully validated and parse json for {uploaded_file.name} but is not expected format... Trying again...")
+                        continue
 
+                    st.session_state['successful_processed_files'].append(uploaded_file.name)
 
+                if max_attempts == 0 and response_json_valid == False and  is_expected_json == False:
+                    st.session_state['fail_processed_files'].append(uploaded_file.name)
+
+            st.session_state['request_count'] = 0 #Reset request_count
             df = pd.DataFrame(all_data)
+            print(f"Parsed Results for {uploaded_file.name}: {parsed_result}")
+            all_data.append(parsed_result)
             ### Dummy data sample
             # data = {
             #     "Name": ["Name 1", "Name 2", "Name 3"],
@@ -1292,4 +1355,3 @@ elif selected_option == "Resume Data Miner":
         # Only show balloons if either download button is clicked
         if csv_downloaded or excel_downloaded:
             st.balloons()
-
