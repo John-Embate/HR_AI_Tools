@@ -939,9 +939,9 @@ if selected_option == "Resume Job Hopper Identifier":
                                 try:
                                     analysis_result = generate_response(file)
                                 except Exception as e:
-                                    print(f"Failed to process the following file: {file.name}...\n\n Due to error: f{str(e)}")
+                                    print(f"Failed to process the following file: {file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
                                     max_attempts = max_attempts - 1 
-                                    st.toast(f"Failed to process the following file: {file.name}...\n\n Due to error: f{str(e)}")
+                                    st.toast(f"Failed to process the following file: {file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
                                     continue
 
                                 #Test 2
@@ -1225,8 +1225,8 @@ elif selected_option == "Resume - Job Description Fit Identifier":
                             try:
                                 response = model.generate_content(prompt).text
                             except Exception as e:
-                                print(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}")
-                                st.toast(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}")
+                                print(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
+                                st.toast(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
                                 continue #Continue on next operations, this will skip the while loop entirely
 
                             parsed_result, response_json_valid = extract_and_parse_json(response)
