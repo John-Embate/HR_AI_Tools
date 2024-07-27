@@ -700,7 +700,6 @@ Resume Information:
             # Raise an exception when the request limit for primary requests is reached
             raise Exception("Request limit reached for initial processing. Please wait a minute before trying again.")
 
-        
         if st.session_state['request_count'] <= 15:
             main_prompt = query_text + primary_response.text 
             main_response = chat.send_message(main_prompt)
@@ -1148,6 +1147,10 @@ elif selected_option == "Resume - Job Description Fit Identifier":
     st.session_state.uploaded_files = uploaded_files
 
     if st.button('Analyze Resumes'):
+        if not st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] or st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] == "":
+            st.warning("Please enter your Google Gen API Key to proceed.")
+            st.stop()
+
         if not uploaded_files:
             st.warning("Please upload at least one PDF file to analyze.")
         elif not st.session_state.get('criteria'):
@@ -1214,6 +1217,7 @@ elif selected_option == "Resume - Job Description Fit Identifier":
 
                     if st.session_state["request_count"] < 15:
                         response_json_valid = False
+                        is_expected_json = False
                         max_attempts = 3
                         parsed_result = {}
 
@@ -1248,7 +1252,7 @@ elif selected_option == "Resume - Job Description Fit Identifier":
                             st.session_state["total_resume_processed"] += 1 #Increment starting number
 
 
-                        if max_attempts == 0 and response_json_valid == False and  is_expected_json == False:
+                        if max_attempts == 0 and response_json_valid == False and is_expected_json == False:
                             st.session_state['fail_processed_files'].append(uploaded_file.name)
 
                 st.session_state['request_count'] = 0 #Reset request_count
