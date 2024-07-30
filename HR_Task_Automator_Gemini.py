@@ -1379,15 +1379,16 @@ elif selected_option == "Resume Data Miner":
                 Provide your answer in a json format following the structure below:
                 {{
                 """ 
-                for point in st.session_state['data_points']:
+                for idx, point in enumerate(st.session_state['data_points']):
                     prompt += f"\"{point}\": <information>"
-                    if idx < len(st.session_state['criteria']):
+                    if idx < len(st.session_state['data_points']) - 1:  # Check if it's not the last item
                         prompt += ","
-                prompt += "\n"
+                    prompt += "\n"
                 prompt += f"""}}
                 --------------
                 """
 
+                print(prompt)
                 genai.configure(api_key=st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"])
                 # Choose a model that's appropriate for your use case.
                 model = genai.GenerativeModel('gemini-1.5-flash',
