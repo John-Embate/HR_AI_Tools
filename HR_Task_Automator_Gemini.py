@@ -1,3 +1,4 @@
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from pdfminer.high_level import extract_text
 import google.generativeai as genai
 import matplotlib.pyplot as plt
@@ -1228,10 +1229,10 @@ elif selected_option == "Resume - Job Description Fit Identifier":
                             response = ""
     
                             st.session_state['request_count'] += 1
-                            max_attempts = max_attempts - 1 
                             try:
                                 response = model.generate_content(prompt).text
                             except Exception as e:
+                                max_attempts = max_attempts - 1 
                                 print(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
                                 st.toast(f"Failed to process the following file: {uploaded_file.name}...\n\n Due to error: f{str(e)}.\n\n Trying again... Retries left: {max_attempts} attempt/s")
                                 continue #Continue on next operations, this will skip the while loop entirely
@@ -1366,6 +1367,11 @@ elif selected_option == "Resume Data Miner":
     uploaded_files = st.file_uploader("Upload Resume PDFs", accept_multiple_files=True, type="pdf", key="file_uploader_miner")
 
     if st.button('Mine Resumes'):
+
+        if not st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] or st.session_state["api_keys"]["GOOGLE_GEN_AI_API_KEY"] == "":
+            st.warning("Please enter your Google Gen API Key to proceed.")
+            st.stop()
+
         if not uploaded_files:
             st.warning("Please upload at least one PDF file to analyze.")
         elif not st.session_state.get('data_points'):
@@ -1374,7 +1380,7 @@ elif selected_option == "Resume Data Miner":
             all_results = []
             for uploaded_file in uploaded_files:
                 text = extract_text(uploaded_file)
-                prompt = f"""Extract the following information from the resume, enter NA if it doesn't exist:\n\nResume text: {text}\n\n"""
+                prompt = f"""Resume text:\n{text}\n\nExtract the following information from the resume, enter NA if it doesn't exist:\n\n"""
                 for point in st.session_state['data_points']:
                     prompt += f"{point}\n"
                 prompt += f"""\n
@@ -1407,7 +1413,13 @@ elif selected_option == "Resume Data Miner":
                 parsed_result = {}
 
                 while not response_json_valid and max_attempts >0: ## Wait till the response json is valid
-                    response = model.generate_content(prompt).text
+                    response = model.generate_content(prompt,
+                        safety_settings={
+                            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE
+                        }).text
                     parsed_result, response_json_valid = extract_and_parse_json(response)
                     if response_json_valid == False:
                         print(f"Failed to validate and parse json for {uploaded_file.name}... Trying again...")
@@ -1435,4 +1447,3 @@ elif selected_option == "Resume Data Miner":
         # Only show balloons if either download button is clicked
         if csv_downloaded or excel_downloaded:
             st.balloons()
-
