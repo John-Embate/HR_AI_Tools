@@ -38,6 +38,15 @@ if 'request_count' not in st.session_state:
 if 'resume_progress_bar' not in st.session_state:
     st.session_state['resume_progress_bar'] = None
 
+if 'tech_keywords' not in st.session_state:
+    st.session_state.tech_keywords = []
+
+if 'exp_keywords' not in st.session_state:
+    st.session_state.exp_keywords = []
+
+if 'edu_keywords' not in st.session_state:
+    st.session_state.edu_keywords = []
+
 #For data filtering and report: START
 def get_longest_time_at_a_job_duration_company(json_data):
     """Returns a tuple (company_name, job_role, duration) of the longest time an applicant 
@@ -1096,8 +1105,6 @@ elif selected_option == "Resume - Job Description Fit Identifier":
         with st.expander("Key Criteria for Evaluation - Technical Skills"):
             keyword_input = st.text_input("Add a new keyword", key='tech_skill_keyword')
             if st.button("Add Keyword", key='add_tech_keyword'):
-                if 'tech_keywords' not in st.session_state:
-                    st.session_state.tech_keywords = []
                 st.session_state.tech_keywords.append(keyword_input)
             if 'tech_keywords' in st.session_state:
                 for idx, keyword in enumerate(st.session_state.tech_keywords):
@@ -1114,8 +1121,6 @@ elif selected_option == "Resume - Job Description Fit Identifier":
         with st.expander("Key Criteria for Evaluation - Relevant Experience"):
             keyword_input = st.text_input("Add a new keyword", key='exp_keyword')
             if st.button("Add Keyword", key='add_exp_keyword'):
-                if 'exp_keywords' not in st.session_state:
-                    st.session_state.exp_keywords = []
                 st.session_state.exp_keywords.append(keyword_input)
             if 'exp_keywords' in st.session_state:
                 for idx, keyword in enumerate(st.session_state.exp_keywords):
@@ -1132,8 +1137,6 @@ elif selected_option == "Resume - Job Description Fit Identifier":
         with st.expander("Key Criteria for Evaluation - Education Relevance"):
             keyword_input = st.text_input("Add a new keyword", key='edu_keyword')
             if st.button("Add Keyword", key='add_edu_keyword'):
-                if 'edu_keywords' not in st.session_state:
-                    st.session_state.edu_keywords = []
                 st.session_state.edu_keywords.append(keyword_input)
             if 'edu_keywords' in st.session_state:
                 for idx, keyword in enumerate(st.session_state.edu_keywords):
